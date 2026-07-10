@@ -1,0 +1,943 @@
+---
+title: "Sri Lanka Dengue Surveillance"
+author: AKT
+format:
+  dashboard:
+    orientation: rows
+    embed-resources: true
+    scrolling: true
+    theme: cosmo
+     
+---
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+library(tidyverse)
+library(magrittr)
+library(plotly)
+library(DT)
+library(lubridate)
+library(timetk)
+library(feasts)
+library(tsibble)
+library(fable)
+library(slider)
+library(htmltools)
+library(sf)
+library(geojsonsf)
+library(jsonlite)
+
+df <- read_csv("dengue.csv") %>%
+  select(-starts_with("...")) %>%
+  mutate(
+    start.date = mdy(start.date),
+    end.date = mdy(end.date)
+  )
+
+SELECTED_YEAR <- max(df$year)
+PREV_YEAR <- SELECTED_YEAR - 1
+
+cur  <- df %>% filter(year == SELECTED_YEAR)
+prev <- df %>% filter(year == PREV_YEAR)
+
+TOTAL_DISTRICTS <- n_distinct(df$district)
+
+# Shared plotly theme (light mode defaults; JS will patch on dark toggle)
+base_layout <- list(
+  paper_bgcolor = "rgba(0,0,0,0)",
+  plot_bgcolor  = "rgba(0,0,0,0)",
+  font = list(family = "Inter, sans-serif", color = "#1e293b", size = 12),
+  xaxis = list(
+    gridcolor = "rgba(0,0,0,0.07)",
+    zerolinecolor = "rgba(0,0,0,0.12)",
+    tickfont = list(color = "#475569")
+  ),
+  yaxis = list(
+    gridcolor = "rgba(0,0,0,0.07)",
+    zerolinecolor = "rgba(0,0,0,0.12)",
+    tickfont = list(color = "#475569")
+  ),
+  legend = list(font = list(color = "#cbd5e1")),
+  margin = list(l = 50, r = 20, t = 30, b = 50)
+)
+
+accent   <- "#ea580c"   # vivid orange — dengue / alert colour
+accent2  <- "#0284c7"   # sky blue — trend lines
+accent3  <- "#7c3aed"   # violet — secondary series
+```
+
+# Summary
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+# Pre-compute all stats used in value boxes below
+total_cases    <- sum(df$cases)
+yr_min         <- min(df$year); yr_max <- max(df$year)
+yrs_covered    <- yr_max - yr_min + 1
+n_districts    <- n_distinct(df$district)
+n_records      <- nrow(df)
+
+worst_year_tbl   <- df %>% group_by(year) %>% summarise(cases=sum(cases)) %>% slice_max(cases,n=1)
+worst_year       <- worst_year_tbl$year
+worst_year_cases <- format(worst_year_tbl$cases, big.mark=",")
+
+single_wk      <- df %>% group_by(start.date) %>% summarise(cases=sum(cases),.groups="drop") %>% slice_max(cases,n=1)
+single_wk_val  <- format(single_wk$cases, big.mark=",")
+single_wk_lbl  <- format(single_wk$start.date, "%b %Y")
+
+avg_per_dist   <- df %>%
+  group_by(start.date, district) %>% summarise(cases=sum(cases),.groups="drop") %>%
+  pull(cases) %>% mean() %>% round(1)
+
+cur_total      <- sum(cur$cases)
+prev_total     <- sum(prev$cases)
+
+top5 <- df %>% group_by(district) %>% summarise(cases=sum(cases)) %>%
+  slice_max(cases,n=5) %>% arrange(desc(cases)) %>%
+  mutate(pct      = sprintf("%.1f%% of all cases", cases/total_cases*100),
+         cases_fmt = format(cases, big.mark=","))
+```
+
+## Row
+
+```{r}
+#| component: valuebox
+#| title: "Total Cases"
+list(color="#1d4ed8", value=format(total_cases,big.mark=","),
+     icon="database-fill")
+```
+
+```{r}
+#| component: valuebox
+#| title: "Years Covered"
+list(color="#15803d", value=as.character(yrs_covered),
+     icon="calendar3")
+```
+
+```{r}
+#| component: valuebox
+#| title: "Districts Tracked"
+list(color="#7e22ce", value=as.character(n_districts),
+     icon="geo-alt-fill")
+```
+
+```{r}
+#| component: valuebox
+#| title: "Weekly Records"
+list(color="#b45309", value=format(n_records,big.mark=","),
+     icon="table")
+```
+
+## Row
+
+```{r}
+#| component: valuebox
+#| title: "Worst Year"
+list(color="#b91c1c", value=as.character(worst_year),
+     icon="exclamation-triangle-fill")
+```
+
+```{r}
+#| component: valuebox
+#| title: "Single-Week Record"
+list(color="#c2410c", value=single_wk_val,
+     icon="graph-up-arrow")
+```
+
+```{r}
+#| component: valuebox
+#| title: "Avg Weekly Cases"
+list(color="#a16207", value=as.character(avg_per_dist),
+     icon="bar-chart-fill")
+```
+
+```{r}
+#| component: valuebox
+#| title: !expr paste(yr_max, "Cases (to date)")
+list(color="#0369a1", value=format(cur_total,big.mark=","),
+     icon="activity")
+```
+
+## Row
+
+```{r}
+#| component: valuebox
+#| title: !expr top5$district[1]
+list(color="#0f766e", value=top5$cases_fmt[1], icon="pin-map-fill")
+```
+
+```{r}
+#| component: valuebox
+#| title: !expr top5$district[2]
+list(color="#0f766e", value=top5$cases_fmt[2], icon="pin-map-fill")
+```
+
+```{r}
+#| component: valuebox
+#| title: !expr top5$district[3]
+list(color="#0f766e", value=top5$cases_fmt[3], icon="pin-map-fill")
+```
+
+```{r}
+#| component: valuebox
+#| title: !expr top5$district[4]
+list(color="#0f766e", value=top5$cases_fmt[4], icon="pin-map-fill")
+```
+
+```{r}
+#| component: valuebox
+#| title: !expr top5$district[5]
+list(color="#0f766e", value=top5$cases_fmt[5], icon="pin-map-fill")
+```
+
+## Row
+
+```{r}
+#| title: "📍 Weekly Cases by District"
+
+districts_list <- sort(unique(df$district))
+first_district <- districts_list[1]
+df_sorted <- df %>% arrange(district, start.date)
+
+buttons <- lapply(districts_list, function(d) {
+  list(
+    method = "restyle",
+    args = list(list("transforms[0].value" = d)),
+    label = d
+  )
+})
+
+plot_ly(
+  df_sorted,
+  x = ~start.date,
+  y = ~cases,
+  type = "scatter",
+  mode = "lines",
+  fill = "tozeroy",
+  fillcolor = "rgba(234,88,12,0.12)",
+  line = list(color = accent, width = 2),
+  height = 520,
+  hovertemplate = "<b>%{x|%d %b %Y}</b><br>Cases: %{y:,}<extra></extra>",
+  transforms = list(
+    list(type = "filter", target = ~district, operation = "=", value = first_district)
+  )
+) %>%
+  layout(
+    xaxis = modifyList(base_layout$xaxis, list(
+      title = list(text = "Date", font = list(color = "#475569")),
+      rangeslider = list(visible = TRUE,
+                         bgcolor = "rgba(0,0,0,0.04)",
+                         bordercolor = "rgba(0,0,0,0.10)")
+    )),
+    yaxis = modifyList(base_layout$yaxis, list(
+      title = list(text = "Weekly Cases", font = list(color = "#475569"))
+    )),
+    paper_bgcolor = base_layout$paper_bgcolor,
+    plot_bgcolor  = base_layout$plot_bgcolor,
+    font          = base_layout$font,
+    margin        = list(t = 90, b = 20, l = 60, r = 20),
+    updatemenus = list(list(
+      type       = "dropdown",
+      active     = 0,
+      x          = 0,
+      xanchor    = "left",
+      y          = 1.18,
+      yanchor    = "top",
+      bgcolor    = "#ffffff",
+      bordercolor = "#94a3b8",
+      font       = list(color = "#1e293b", size = 13),
+      buttons    = buttons
+    ))
+  )
+```
+
+## Row
+
+::: {.card}
+Case counts vary considerably across districts, with some showing sharp isolated spikes while others exhibit sustained multi-week surges. The most pronounced peaks tend to cluster in mid-year and towards year-end, aligning with Sri Lanka's monsoon seasons. Certain districts display a clear escalating pattern in recent years, suggesting worsening transmission, while others remain comparatively stable throughout the surveillance period.
+:::
+
+# Overview
+
+## Row {height="40%"}
+
+```{r}
+#| title: "📈 National Weekly Case Trend"
+
+weekly_trend <- df %>%
+  group_by(year, week) %>%
+  summarise(cases = sum(cases), .groups = "drop") %>%
+  arrange(year, week) %>%
+  mutate(idx = row_number())
+
+tick_idx <- weekly_trend %>% group_by(year) %>% slice(1) %>% pull(idx)
+tick_lab <- weekly_trend %>% group_by(year) %>% slice(1) %>% pull(year)
+
+p <- plot_ly(weekly_trend, x = ~idx, y = ~cases,
+             type = "scatter", mode = "lines",
+             fill = "tozeroy",
+             fillcolor = "rgba(234,88,12,0.10)",
+             line = list(color = accent, width = 2),
+             height = 360) %>%
+  layout(
+    xaxis = modifyList(base_layout$xaxis, list(
+      title = list(text = "Year", font = list(color = "#475569")),
+      tickmode = "array", tickvals = tick_idx, ticktext = tick_lab
+    )),
+    yaxis = modifyList(base_layout$yaxis, list(
+      title = list(text = "Cases", font = list(color = "#475569"))
+    )),
+    paper_bgcolor = base_layout$paper_bgcolor,
+    plot_bgcolor  = base_layout$plot_bgcolor,
+    font          = base_layout$font,
+    margin        = base_layout$margin,
+    hovermode     = "x unified"
+  )
+p
+```
+
+## Row
+
+::: {.card}
+National dengue transmission has not been uniform over time — certain years stand out with dramatically elevated weekly counts, indicating large-scale epidemic episodes. The overall baseline appears to have risen compared to earlier years, pointing to a long-term increase in transmission intensity. Acute spikes that dwarf surrounding weeks reflect rapid outbreak escalation rather than gradual build-up, consistent with the explosive dynamics typical of vector-borne disease.
+:::
+
+## Row {height="60%"}
+
+```{r}
+#| title: "🗓️ Weekly Dengue Cases Heatmap (All Years)"
+
+heatmap_data <- df %>%
+  group_by(year, week) %>%
+  summarise(cases = sum(cases), .groups = "drop")
+
+# Build full grid: all year × week combinations, fill missing with NA
+all_years <- sort(unique(heatmap_data$year))
+all_weeks <- 1:52
+
+hm_full <- expand.grid(year = all_years, week = all_weeks) %>%
+  left_join(heatmap_data, by = c("year", "week"))
+
+hm_wide <- hm_full %>%
+  pivot_wider(names_from = week, values_from = cases)
+
+years_hm <- hm_wide$year
+z_hm     <- as.matrix(hm_wide %>% select(-year))
+colnames(z_hm) <- 1:52
+
+plot_ly(
+  x = 1:52,
+  y = years_hm,
+  z = z_hm,
+  type = "heatmap",
+  colorscale = list(
+    list(0,    "#08306b"),
+    list(0.15, "#08519c"),
+    list(0.35, "#2171b5"),
+    list(0.55, "#4292c6"),
+    list(0.75, "#6baed6"),
+    list(0.90, "#9ecae1"),
+    list(1,    "#deebf7")
+  ),
+  colorbar = list(
+    title    = list(text = "Cases", font = list(color = "#475569")),
+    tickfont = list(color = "#475569")
+  ),
+  hovertemplate = "Week %{x}<br>Year %{y}<br>Cases: %{z:,}<extra></extra>",
+  zsmooth = FALSE,
+  height  = 520
+) %>%
+  layout(
+    xaxis = modifyList(base_layout$xaxis, list(
+      title    = list(text = "Week", font = list(color = "#475569")),
+      tickmode = "linear", dtick = 5,
+      range    = c(0.5, 52.5)
+    )),
+    yaxis = modifyList(base_layout$yaxis, list(
+      title      = list(text = "Year", font = list(color = "#475569")),
+      tickformat = "d",
+      tickmode   = "linear", dtick = 1,
+      range      = c(min(years_hm) - 0.5, max(years_hm) + 0.5)
+    )),
+    paper_bgcolor = base_layout$paper_bgcolor,
+    plot_bgcolor  = base_layout$plot_bgcolor,
+    font          = base_layout$font,
+    margin        = list(l = 60, r = 20, t = 20, b = 50)
+  )
+```
+
+## Row
+
+::: {.card}
+The heatmap shows the same pattern repeating every year — cases go up around May–July and again around November–December, matching Sri Lanka's two monsoon seasons. Some years are worse than others overall, but the timing of the peaks barely changes from year to year, even when the size of the outbreak does.
+:::
+
+# District Analysis
+
+## Row
+
+```{r}
+#| title: "📊 Annual Case Totals"
+
+yearly_totals <- df %>%
+  group_by(year) %>%
+  summarise(cases = sum(cases), .groups = "drop")
+
+plot_ly(yearly_totals,
+        x = ~year, y = ~cases,
+        type = "bar",
+        marker = list(
+          color = ~cases,
+          colorscale = list(
+            list(0, "#fef3c7"),
+            list(1, "#f97316")
+          ),
+          showscale = FALSE,
+          line = list(color = "rgba(0,0,0,0)")
+        ),
+        text = ~format(cases, big.mark = ","),
+        textposition = "outside",
+        textfont = list(color = "#cbd5e1", size = 10),
+        height = 500) %>%
+  layout(
+    xaxis = modifyList(base_layout$xaxis, list(
+      title = list(text = "Year", font = list(color = "#475569")),
+      tickformat = "d"
+    )),
+    yaxis = modifyList(base_layout$yaxis, list(
+      title = list(text = "Total Cases", font = list(color = "#475569"))
+    )),
+    paper_bgcolor = base_layout$paper_bgcolor,
+    plot_bgcolor  = base_layout$plot_bgcolor,
+    font          = base_layout$font,
+    margin        = list(l = 60, r = 20, t = 20, b = 50)
+  )
+```
+
+## Row
+
+::: {.card}
+Dengue burden has fluctuated substantially across years, with one or two years standing out as clear epidemic peaks dwarfing the rest. The colour gradient reinforces this contrast — the darkest bars correspond to years of exceptionally high national transmission. There is no consistent downward trajectory, suggesting that dengue remains a persistent and periodically explosive public health challenge in Sri Lanka rather than a disease being brought progressively under control.
+:::
+
+## Row
+
+```{r}
+#| title: "🗺️ Dengue Case Load by District"
+#| message: false
+#| warning: false
+
+# Read and clean shapefile
+lka_sf <- sf::st_read('lka-ADM2.geojson', quiet = TRUE) %>%
+  select(shapeName, geometry) %>%
+  mutate(
+    district = stringr::str_remove(shapeName, ' District'),
+    district = ifelse(district == "Nuwara Eliya", "NuwaraEliya", district)
+  ) %>%
+  select(district, geometry)
+
+# Case totals per district
+data_map <- df %>%
+  summarise(cases = sum(cases, na.rm = TRUE), .by = 'district')
+
+# Join cases onto shapefile
+map_data <- left_join(lka_sf, data_map, by = 'district') %>%
+  mutate(cases = replace_na(cases, 0))
+
+# Convert to GeoJSON for plotly choropleth
+geojson <- jsonlite::fromJSON(geojsonsf::sf_geojson(map_data), simplifyVector = FALSE)
+
+plot_ly(
+  type         = "choroplethmapbox",
+  geojson      = geojson,
+  locations    = map_data$district,
+  z            = map_data$cases,
+  featureidkey = "properties.district",
+ colorscale = list(
+  list(0.0,  "#fff5f0"),
+  list(0.1,  "#fee0d2"),
+  list(0.2,  "#fcbba1"),
+  list(0.3,  "#fc9272"),
+  list(0.4,  "#fb6a4a"),
+  list(0.5,  "#ef3b2c"),
+  list(0.6,  "#cb181d"),
+  list(0.7,  "#a50f15"),
+  list(0.8,  "#67000d"),
+  list(0.9,  "#3d0007"),
+  list(1.0,  "#1a0003")
+),
+  zmin         = 0,
+  zmax         = max(map_data$cases),
+  colorbar     = list(
+    title    = list(text = "Cases", font = list(color = "#475569")),
+    tickfont = list(color = "#475569")
+  ),
+  text         = map_data$district,
+  customdata   = map_data$cases,
+  hovertemplate = "<b>%{text}</b><br>Cases: %{customdata:,}<extra></extra>",
+  marker       = list(line = list(color = "white", width = 0.8)),
+  height       = 580
+) %>%
+  layout(
+    mapbox = list(
+      style  = "carto-positron",
+      center = list(lon = 80.7, lat = 7.9),
+      zoom   = 6
+    ),
+    paper_bgcolor = "rgba(0,0,0,0)",
+    font          = list(color = "#475569"),
+    margin        = list(l = 0, r = 0, t = 10, b = 10)
+  )
+```
+
+## Row
+
+::: {.card}
+Dengue burden is geographically concentrated rather than evenly spread across Sri Lanka. The Western Province — particularly Colombo and Gampaha — accounts for a disproportionately large share of total cases, reflecting the influence of high urban population density and conditions that favour Aedes mosquito breeding. However, notable burden is also visible in the North-Central and North-Western provinces, indicating that transmission extends well beyond the urban core. Several districts in the interior and deep south remain comparatively low-burden throughout the surveillance period.
+:::
+
+# Seasonality & Trends
+
+## Row
+
+```{r}
+#| title: "📦 Cases by Epidemiological Week (Box Plot)"
+#| message: false
+#| warning: false
+
+national_weekly <- df %>%
+  group_by(start.date) %>%
+  summarise(cases = sum(cases), .groups = "drop") %>%
+  arrange(start.date) %>%
+  mutate(
+    epi_week = isoweek(start.date),
+    yr       = year(start.date),
+    month_lbl = month(start.date, label = TRUE, abbr = TRUE)
+  )
+
+plot_ly(national_weekly, x = ~factor(epi_week), y = ~cases,
+        type = "box",
+        marker = list(color = accent, opacity = 0.5,
+                      line = list(color = accent)),
+        line   = list(color = accent2),
+        fillcolor = "rgba(2,132,199,0.12)",
+        height = 400) %>%
+  layout(
+    xaxis = modifyList(base_layout$xaxis, list(
+      title = list(text = "Epidemiological Week", font = list(color = "#475569")),
+      tickmode = "linear", dtick = 4
+    )),
+    yaxis = modifyList(base_layout$yaxis, list(
+      title = list(text = "Cases", font = list(color = "#475569"))
+    )),
+    paper_bgcolor = base_layout$paper_bgcolor,
+    plot_bgcolor  = base_layout$plot_bgcolor,
+    font          = base_layout$font,
+    margin        = base_layout$margin,
+    showlegend    = FALSE
+  )
+```
+
+```{r}
+#| title: "📦 Cases by Month"
+#| message: false
+#| warning: false
+
+plot_ly(national_weekly, x = ~month_lbl, y = ~cases,
+        type = "box",
+        marker = list(color = accent3, opacity = 0.5,
+                      line = list(color = accent3)),
+        line      = list(color = accent3),
+        fillcolor = "rgba(124,58,237,0.10)",
+        height    = 400) %>%
+  layout(
+    xaxis = modifyList(base_layout$xaxis, list(
+      title      = list(text = "Month", font = list(color = "#475569")),
+      categoryorder = "array",
+      categoryarray = month.abb
+    )),
+    yaxis = modifyList(base_layout$yaxis, list(
+      title = list(text = "Cases", font = list(color = "#475569"))
+    )),
+    paper_bgcolor = base_layout$paper_bgcolor,
+    plot_bgcolor  = base_layout$plot_bgcolor,
+    font          = base_layout$font,
+    margin        = base_layout$margin,
+    showlegend    = FALSE
+  )
+```
+
+## Row
+
+::: {.card}
+Both plots show the same clear seasonal pattern. Cases rise during May–June and again around November–December, in line with the two monsoon seasons. During these peak months, the results also vary more from year to year — some monsoons bring big outbreaks, others only a mild rise. In between the peaks, case numbers stay low and fairly predictable.
+:::
+
+## Row
+
+```{r}
+#| title: "🚨 Outbreak Threshold — Historical Epi-Week Baseline (WHO/Cullen Method)"
+#| message: false
+#| warning: false
+
+# Classic epidemic-channel / Cullen method: for each epidemiological week,
+# compute the historical mean and SD of cases *at that same calendar week*
+# across all years, then flag any observation exceeding mean + 2 SD.
+# (Unlike a rolling time window, this baseline is seasonally aware — a
+# "normal" week 5 is judged against other week 5s, not the weeks right
+# before it.)
+epi_baseline <- national_weekly %>%
+  group_by(epi_week) %>%
+  summarise(hist_mean = mean(cases), hist_sd = sd(cases), .groups = "drop")
+
+threshold_df <- national_weekly %>%
+  left_join(epi_baseline, by = "epi_week") %>%
+  arrange(start.date) %>%
+  mutate(
+    upper    = hist_mean + 2 * hist_sd,
+    lower    = pmax(hist_mean - 2 * hist_sd, 0),
+    outbreak = cases > upper
+  )
+
+outbreak_pts <- threshold_df %>% filter(outbreak)
+
+plot_ly(height = 480) %>%
+  add_trace(
+    data = threshold_df, x = ~start.date, y = ~upper,
+    type = "scatter", mode = "lines",
+    line = list(color = "rgba(148,163,184,0)"),
+    showlegend = FALSE, hoverinfo = "skip"
+  ) %>%
+  add_trace(
+    data = threshold_df, x = ~start.date, y = ~lower,
+    type = "scatter", mode = "lines",
+    fill = "tonexty", fillcolor = "rgba(2,132,199,0.12)",
+    line = list(color = "rgba(148,163,184,0)"),
+    name = "Historical ±2 SD Band", hoverinfo = "skip"
+  ) %>%
+  add_trace(
+    data = threshold_df, x = ~start.date, y = ~hist_mean,
+    type = "scatter", mode = "lines",
+    line = list(color = accent2, width = 1.5, dash = "dot"),
+    name = "Epi-Week Historical Mean",
+    hovertemplate = "<b>%{x|%d %b %Y}</b><br>Historical Mean: %{y:,.0f}<extra></extra>"
+  ) %>%
+  add_trace(
+    data = threshold_df, x = ~start.date, y = ~cases,
+    type = "scatter", mode = "lines",
+    line = list(color = "#1e293b", width = 1.3),
+    name = "Weekly Cases",
+    hovertemplate = "<b>%{x|%d %b %Y}</b><br>Cases: %{y:,}<extra></extra>"
+  ) %>%
+  add_trace(
+    data = outbreak_pts, x = ~start.date, y = ~cases,
+    type = "scatter", mode = "markers",
+    marker = list(color = accent, size = 7, symbol = "circle",
+                  line = list(color = "#7c2d12", width = 1)),
+    name = "Exceeds Threshold",
+    hovertemplate = "<b>%{x|%d %b %Y}</b><br>Cases: %{y:,}<br>⚠ Above epidemic threshold<extra></extra>"
+  ) %>%
+  layout(
+    xaxis = modifyList(base_layout$xaxis, list(
+      title = list(text = "Date", font = list(color = "#475569")),
+      rangeslider = list(visible = TRUE,
+                         bgcolor = "rgba(0,0,0,0.04)",
+                         bordercolor = "rgba(0,0,0,0.10)")
+    )),
+    yaxis = modifyList(base_layout$yaxis, list(
+      title = list(text = "Cases", font = list(color = "#475569"))
+    )),
+    paper_bgcolor = base_layout$paper_bgcolor,
+    plot_bgcolor  = base_layout$plot_bgcolor,
+    font          = base_layout$font,
+    margin        = list(t = 30, b = 20, l = 60, r = 20),
+    hovermode     = "x unified",
+    legend        = list(orientation = "h", y = -0.3, font = list(color = "#cbd5e1"))
+  )
+```
+
+## Row
+
+::: {.card}
+The orange dots (outbreak weeks) aren't spread evenly over time — they bunch up in certain years, where cases stayed well above normal for weeks in a row. In other years, actual cases stay close to what's expected, showing the normal seasonal pattern usually holds up well. Outbreak weeks have become more frequent in recent years compared to earlier in the data, suggesting dengue outbreaks are getting more common.
+:::
+
+## Row
+
+# Distribution
+
+## Row
+
+```{r}
+#| title: "📦 Cases by Quarter"
+#| message: false
+#| warning: false
+
+national_weekly_q <- national_weekly %>%
+  mutate(quarter_lbl = paste0("Q", quarter(start.date)))
+
+plot_ly(national_weekly_q, x = ~quarter_lbl, y = ~cases,
+        type = "box",
+        marker = list(color = "#0891b2", opacity = 0.5,
+                      line = list(color = "#0891b2")),
+        line      = list(color = "#0891b2"),
+        fillcolor = "rgba(6,182,212,0.10)",
+        height    = 380) %>%
+  layout(
+    xaxis = modifyList(base_layout$xaxis, list(
+      title         = list(text = "Quarter", font = list(color = "#475569")),
+      categoryorder = "array",
+      categoryarray = c("Q1","Q2","Q3","Q4")
+    )),
+    yaxis = modifyList(base_layout$yaxis, list(
+      title = list(text = "Cases", font = list(color = "#475569"))
+    )),
+    paper_bgcolor = base_layout$paper_bgcolor,
+    plot_bgcolor  = base_layout$plot_bgcolor,
+    font          = base_layout$font,
+    margin        = base_layout$margin,
+    showlegend    = FALSE
+  )
+```
+
+```{r}
+#| title: "📊 Annual Total Cases (Box by Year)"
+#| message: false
+#| warning: false
+
+plot_ly(national_weekly, x = ~factor(yr), y = ~cases,
+        type = "box",
+        marker = list(color = accent, opacity = 0.5,
+                      line = list(color = accent)),
+        line      = list(color = accent),
+        fillcolor = "rgba(234,88,12,0.10)",
+        height    = 380) %>%
+  layout(
+    xaxis = modifyList(base_layout$xaxis, list(
+      title = list(text = "Year", font = list(color = "#475569"))
+    )),
+    yaxis = modifyList(base_layout$yaxis, list(
+      title = list(text = "Cases", font = list(color = "#475569"))
+    )),
+    paper_bgcolor = base_layout$paper_bgcolor,
+    plot_bgcolor  = base_layout$plot_bgcolor,
+    font          = base_layout$font,
+    margin        = base_layout$margin,
+    showlegend    = FALSE
+  )
+```
+
+## Row
+
+::: {.card}
+Q2 (April–June) has the highest case counts and the most variation, making it the riskiest quarter. Q4 (October–December) is second highest. Q1 and Q3 are quieter overall, though occasional bad weeks still happen. Looking year by year, some years had both high case counts and many extreme weeks — meaning widespread outbreaks — while other years stayed close to the usual seasonal levels with few surprises.
+:::
+
+# STL & Trends
+
+## Row
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+# Compute STL components once for the four cards below
+library(tsibble)
+library(feasts)
+library(fabletools)
+
+stl_input <- national_weekly %>%
+  mutate(year_week = yearweek(start.date)) %>%
+  arrange(year_week) %>%
+  as_tsibble(index = year_week)
+
+stl_fit   <- stl_input %>% model(STL(cases ~ season(period = 52)))
+stl_comp  <- components(stl_fit) %>%
+  mutate(date = as.Date(year_week))
+```
+
+```{r}
+#| title: "📉 STL — Observed vs Trend"
+#| message: false
+#| warning: false
+
+plot_ly(stl_comp, x = ~date, height = 340) %>%
+  add_trace(y = ~cases, type = "scatter", mode = "lines",
+            name = "Observed",
+            line = list(color = "rgba(234,88,12,0.5)", width = 1.2),
+            hovertemplate = "<b>%{x|%b %Y}</b><br>Observed: %{y:,}<extra></extra>") %>%
+  add_trace(y = ~trend, type = "scatter", mode = "lines",
+            name = "Trend",
+            line = list(color = accent, width = 2.5),
+            hovertemplate = "<b>%{x|%b %Y}</b><br>Trend: %{y:,.0f}<extra></extra>") %>%
+  layout(
+    xaxis     = modifyList(base_layout$xaxis, list(title = list(text = "Date", font = list(color = "#475569")))),
+    yaxis     = modifyList(base_layout$yaxis, list(title = list(text = "Cases", font = list(color = "#475569")))),
+    paper_bgcolor = base_layout$paper_bgcolor, plot_bgcolor = base_layout$plot_bgcolor,
+    font      = base_layout$font, margin = base_layout$margin,
+    hovermode = "x unified",
+    legend    = list(orientation = "h", y = -0.2, font = list(color = "#cbd5e1"))
+  )
+```
+
+```{r}
+#| title: "🌀 STL — Seasonal Component"
+#| message: false
+#| warning: false
+
+plot_ly(stl_comp, x = ~date, y = ~season_52,
+        type = "scatter", mode = "lines",
+        fill = "tozeroy",
+        fillcolor = "rgba(2,132,199,0.10)",
+        line = list(color = accent2, width = 2),
+        height = 340,
+        hovertemplate = "<b>%{x|%b %Y}</b><br>Seasonal: %{y:.1f}<extra></extra>") %>%
+  layout(
+    xaxis     = modifyList(base_layout$xaxis, list(title = list(text = "Date", font = list(color = "#475569")))),
+    yaxis     = modifyList(base_layout$yaxis, list(title = list(text = "Seasonal Effect", font = list(color = "#475569")))),
+    paper_bgcolor = base_layout$paper_bgcolor, plot_bgcolor = base_layout$plot_bgcolor,
+    font = base_layout$font, margin = base_layout$margin, showlegend = FALSE
+  )
+```
+
+## Row
+
+::: {.card}
+The long-term trend hasn't stayed flat — dengue cases rise for a while, then partly fall back, with the highest point matching the major epidemic years seen in the raw data. The seasonal pattern repeats every year with two peaks, showing that much of the week-to-week ups and downs can be predicted just from the time of year. This yearly pattern stays roughly the same size across the years, even though the overall trend level moves up and down.
+:::
+
+## Row
+
+```{r}
+#| title: "🔀 STL — Remainder"
+#| message: false
+#| warning: false
+
+plot_ly(stl_comp, x = ~date, y = ~remainder,
+        type = "bar",
+        marker = list(
+          color = ifelse(stl_comp$remainder >= 0, "rgba(234,88,12,0.75)", "rgba(2,132,199,0.75)"),
+          line  = list(width = 0)
+        ),
+        height = 320,
+        hovertemplate = "<b>%{x|%b %Y}</b><br>Remainder: %{y:.1f}<extra></extra>") %>%
+  layout(
+    xaxis     = modifyList(base_layout$xaxis, list(title = list(text = "Date", font = list(color = "#475569")))),
+    yaxis     = modifyList(base_layout$yaxis, list(title = list(text = "Remainder", font = list(color = "#475569")))),
+    paper_bgcolor = base_layout$paper_bgcolor, plot_bgcolor = base_layout$plot_bgcolor,
+    font = base_layout$font, margin = base_layout$margin, showlegend = FALSE,
+    shapes = list(list(type="line", x0=min(stl_comp$date), x1=max(stl_comp$date),
+                       y0=0, y1=0, line=list(color="rgba(0,0,0,0.15)", width=1)))
+  )
+```
+
+```{r}
+#| title: "📦 STL — Season-Adjusted"
+#| message: false
+#| warning: false
+
+plot_ly(stl_comp, x = ~date, height = 320) %>%
+  add_trace(y = ~cases, type = "scatter", mode = "lines",
+            name = "Observed",
+            line = list(color = "rgba(71,85,105,0.35)", width = 1),
+            hovertemplate = "<b>%{x|%b %Y}</b><br>Observed: %{y:,}<extra></extra>") %>%
+  add_trace(y = ~season_adjust, type = "scatter", mode = "lines",
+            name = "Season-Adjusted",
+            line = list(color = "#16a34a", width = 2.5),
+            hovertemplate = "<b>%{x|%b %Y}</b><br>Season-Adj: %{y:,.0f}<extra></extra>") %>%
+  layout(
+    xaxis     = modifyList(base_layout$xaxis, list(title = list(text = "Date", font = list(color = "#475569")))),
+    yaxis     = modifyList(base_layout$yaxis, list(title = list(text = "Cases", font = list(color = "#475569")))),
+    paper_bgcolor = base_layout$paper_bgcolor, plot_bgcolor = base_layout$plot_bgcolor,
+    font      = base_layout$font, margin = base_layout$margin,
+    hovermode = "x unified",
+    legend    = list(orientation = "h", y = -0.2, font = list(color = "#cbd5e1"))
+  )
+```
+
+## Row
+
+::: {.card}
+The leftover "noise" isn't just random — there are a few big spikes, showing weeks where cases were much higher than the trend and season alone would explain. These spikes line up with known outbreak periods and are probably caused by things outside the normal seasonal cycle, like unusual weather or changes in population immunity. Some of the worst outbreaks happened because the overall trend was already rising, not just because of the season. And in some years, cases stayed above average even outside the usual peak months.
+:::
+
+## Row
+
+```{r}
+#| title: "📈 Rolling 52-Week Mean (National)"
+#| message: false
+#| warning: false
+
+rolling_df <- national_weekly %>%
+  mutate(MA52 = slide_dbl(cases, mean, .before = 51, .complete = TRUE))
+
+plot_ly(height = 400) %>%
+  add_trace(
+    data = rolling_df,
+    x    = ~start.date, y = ~cases,
+    type = "scatter", mode = "lines",
+    fill = "tozeroy",
+    fillcolor = "rgba(234,88,12,0.08)",
+    line = list(color = "#f97316", width = 1.2),
+    name = "Weekly Cases"
+  ) %>%
+  add_trace(
+    data = rolling_df,
+    x    = ~start.date, y = ~MA52,
+    type = "scatter", mode = "lines",
+    line = list(color = "#38bdf8", width = 2.5),
+    name = "52-week MA"
+  ) %>%
+  layout(
+    xaxis = modifyList(base_layout$xaxis, list(
+      title = list(text = "Date", font = list(color = "#475569"))
+    )),
+    yaxis = modifyList(base_layout$yaxis, list(
+      title = list(text = "Cases", font = list(color = "#475569"))
+    )),
+    paper_bgcolor = base_layout$paper_bgcolor,
+    plot_bgcolor  = base_layout$plot_bgcolor,
+    font          = base_layout$font,
+    margin        = base_layout$margin,
+    legend        = list(orientation = "h", x = 0, y = 1.08,
+                         font = list(color = "#cbd5e1")),
+    hovermode     = "x unified"
+  )
+```
+
+## Row
+
+::: {.card}
+The 52-week rolling average smooths out the seasonal ups and downs so you can see the bigger picture. It shows that dengue cases didn't grow in a straight line — instead, there were multi-year stretches where cases rose, hit a sharp peak in epidemic years, then eased back a bit. But the average never drops back to where it started, which suggests the overall baseline level of dengue has gone up over time. This gradual rise is easy to miss when just looking at the raw weekly numbers, since the yearly spikes grab all the attention.
+:::
+
+# Data
+
+## Row
+
+```{r}
+#| title: "Raw Surveillance Data"
+
+datatable(
+  df,
+  options = list(
+    scrollY       = "520px",
+    scrollCollapse = TRUE,
+    paging        = TRUE,
+    pageLength    = 20,
+    dom           = "Bfrtip",
+    initComplete  = JS("function(settings, json) {
+      $(this.api().table().header()).css({'background-color': '#1e293b', 'color': '#e2e8f0'});
+    }")
+  ),
+  class = "display compact",
+  rownames = FALSE
+)
+```
