@@ -1,6 +1,6 @@
 ---
 title: "Sri Lanka Dengue Surveillance"
-author: AKT
+author: AS2022375 - A.K.T Perera
 format:
   dashboard:
     orientation: rows
