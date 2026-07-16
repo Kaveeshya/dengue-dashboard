@@ -1,6 +1,6 @@
 ---
 title: "Sri Lanka Dengue Surveillance"
-author: AS2022375 - A.K.T Perera
+author: AKT - AS2022375
 format:
   dashboard:
     orientation: rows
@@ -941,3 +941,11 @@ datatable(
   rownames = FALSE
 )
 ```
+
+## Row {height="12%"}
+
+::: {.card}
+**Data Source**
+
+Talagala T (2026). *denguedatahub: A Tidy Format Datasets of Dengue by Country*. R package version 4.1.1. <https://thiyangt.github.io/denguedatahubweb/>
+:::
